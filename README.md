@@ -13,7 +13,7 @@ The script writes `suggested pairings.xlsx`. Each suggestion assigns every littl
 To specify twin-taking bigs, edit `TWIN_BIG_NAMES` near the top of `biglittle.py`, for example:
 
 ```python
-TWIN_BIG_NAMES = ["Allison", "Ari"]
+TWIN_BIG_NAMES = ["Random", "Guy"]
 ```
 
 Enter one or two names from the big preference CSV. If you enter one name, the script pairs that big with the most-requested other big. Leave the list empty (`[]`) for automatic selection of both.
