@@ -1,217 +1,216 @@
-import csv 
-from collections import defaultdict
+"""Generate ranked big/little pairing suggestions from preference matrices."""
+
+import csv
+import random
+import re
 import sys
-import math
-
-class BLMatcher(object):
-    """
-    Each object contains a dictionary for littles and bigs. 
-    The little dictionary connects each little with a set of their big preferences 
-    The big dictionary connects each big with set of their little preferences 
-    """
-    def __init__(self, littlesPref, bigsPref):
-        self.little_prefs = {}
-        self.big_prefs = {}
-        self.bigs_matched = {}
-        self.pairs = []    
-
-        self.collect_little_prefs(littlesPref)
-        self.collect_big_prefs(bigsPref)
-        self.fill_in_prefs()
-
-        self.lrank = defaultdict(dict)
-        self.brank = defaultdict(dict)
-
-        for b, prefs in self.big_prefs.items(): 
-            for i, l in enumerate(prefs): 
-                self.brank[b][l] = i
-
-        for l, prefs in self.little_prefs.items(): 
-            for i, b in enumerate(prefs): 
-                self.lrank[l][b] = i
-     
-        self.match()
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 
 
-    """
-    Given the preference sheets for littles, establish preference list dictionaries
-    """
-
-    def collect_little_prefs(self, littlesPref):
-        data = open(littlesPref, 'r')      
-        responses = list(csv.reader(data))
-        responses.pop(0)
-
-        for little in responses:
-        	self.little_prefs[little[1]] = [little[x] for x in range(3, 11)]
-
-        return None
-
-    """
-    Given the preference sheets for bigs, establish preference list dictionaries
-    """
-
-    def collect_big_prefs(self, bigsPref):
-        data = open(bigsPref, 'r')      
-        responses = list(csv.reader(data))
-        responses.pop(0)
-       
-        for big in responses:
-            self.big_prefs[big[1]] = [big[x] for x in range(3, 11)]
-            
-
-        self.most_popular_bigs(responses)
-        return None 
-
-    def most_popular_bigs(self, big_responses):
-        big_counts = {}
-        big_Prefs = {}
-
-        extra = len(self.little_prefs.keys()) - len(big_responses)
-        
-
-        for big_rep in big_responses: 
-            big_Count = 0
-            big = big_rep[1]
-            big_Prefs[big] = [big_rep[x] for x in range(3,12)]
-
-            for little in self.little_prefs: 
-                if big in self.little_prefs[little]: 
-                    big_Count += 1
-            big_counts[big] = big_Count
-
-        while extra > 0:
-
-            b = max(big_counts, key=big_counts.get)
-
-            if (big_Prefs[b][8] == "twins plz" or big_Prefs[b][8] == "huge lin huge lin huge lin" or big_Prefs[b][8] == "two if i must" or big_Prefs[b][8] == "one little <3, two if i must"): 
-                twinbig = b + "2"
-                twinbigrep = big_Prefs[b]
-                twinbigrep.insert(0, twinbig)       #add name 
-                twinbigrep.insert(0, "Timestamp")
-                twinbigrep.pop()
-                self.big_prefs[twinbig] = twinbigrep
-                extra -= 1
-            del big_counts[b]
-
-    """
-    Fill in preferences for the rest of the respective bigs/littles randomly 
-    """
-    def fill_in_prefs(self): 
-        for little in self.little_prefs.keys(): 
-            for big in self.big_prefs.keys():
-
-                if big not in self.little_prefs[little]: 
-                    check = big[0:len(big)-1]
-                   
-                    if check in self.little_prefs[little]: 
-                        index = self.little_prefs[little].index(check)
-                        self.little_prefs[little].insert(index+1, big)
-                        
-                        continue
-                    self.little_prefs[little].append(big)
-
-        for big in self.big_prefs.keys(): 
-            for little in self.little_prefs.keys(): 
-                if little not in self.big_prefs[big]: 
-                    self.big_prefs[big].append(little)
+SUGGESTION_COUNT = 10
+# Optional: enter one or two big names here to require them to take twins.
+# If one name is provided, the second is selected automatically.
+# Leave empty to select the two most-requested bigs automatically.
+TWIN_BIG_NAMES = []
 
 
-    """
-    Test whether big prefers l over lit (current little match)
-    """
-    def prefers(self, b, l, lit): 
-        return self.brank[b][l] < self.brank[b][lit]
+def clean(value):
+    return " ".join(value.strip().split())
 
-    """
-    If first choice is already matched, try the nxt choice.
-    Returns the nxt choice big for a given little
-    """
-    def nxt_choice(self, l, b): 
-        i = self.lrank[l][b] + 1
-        if i >= len(self.little_prefs[l]): 
-            return ""
 
-        return self.little_prefs[l][i]
+def split_names(value):
+    """Return names from a cell, including the two names in (A)/(B) cells."""
+    value = clean(value)
+    if not value:
+        return []
+    marked = re.findall(r"\([ab]\)\s*([^()]+?)(?=\s*\([ab]\)|$)", value, re.I)
+    if marked:
+        return [clean(name) for name in marked if clean(name)]
+    # Some cells omit parentheses around the A/B labels.
+    marked = re.findall(r"(?:^|\s)[ab]\)\s*(.*?)(?=\s+[ab]\)\s*|$)", value, re.I)
+    if marked:
+        return [clean(name) for name in marked if clean(name)]
+    return [value]
 
-    """
-    Match littles with their next preferred big
-    """
-    def match(self, littles=None, nxt=None, bigs=None):
-        if littles is None: 
-            littles = self.little_prefs.keys()
-        if nxt is None: 
-            nxt = {l:rank[0] for l, rank in self.little_prefs.items()}
-        if bigs is None: 
-            bigs = {}                       #mappings of bigs to current little matches
-        if not len(littles): 
-            self.pairs = [(lit, b) for b, lit in self.big_prefs.items()]
-            self.bigs_matched = bigs 
-            return bigs 
-        l, littles = list(littles)[0], list(littles)[1:]
-        b = nxt[l]
-        if b != "":                         #nxt big to try to match little with 
-            nxt[l] = self.nxt_choice(l, b) 
 
-            if b in bigs:
-                lit = bigs[b]                   #current little
-                if self.prefers(b, l, lit):
-                    littles.append(lit)
-                    bigs[b] = l
-                else: 
-                    littles.append(l)
-            else: 
-                bigs[b] = l
-        
-        return self.match(littles, nxt, bigs)
+def matrix_names(path):
+    with open(path, newline="", encoding="utf-8-sig") as source:
+        rows = list(csv.reader(source))
+    header_index = next((i for i, row in enumerate(rows)
+                         if row and not clean(row[0]) and sum(bool(clean(x)) for x in row[1:]) > 1), None)
+    if header_index is None:
+        raise ValueError(f"{path}: expected a ranking matrix with names in a header row")
+    names = [clean(name) for name in rows[header_index][1:] if clean(name)]
+    return names, rows, header_index
 
-    """
-    """
-    def create_pref_spreadsheet(self):
-        filename = "preferences.csv"
-        file = open(filename, 'w')
-        filewriter = csv.writer(file, delimiter=',', quotechar='"')
-        fieldnames = ['Big', 'Suggested Little', 'Big Rank', 'Little Rank', 'Rematch?']
-        filewriter = csv.DictWriter(file, fieldnames=fieldnames)
-        filewriter.writeheader()
 
-        for match in self.bigs_matched.keys(): 
-            big = match 
-            little = self.bigs_matched[match]
-            bigRank = self.brank[big][little]
-            littleRank = self.lrank[little][big]
-            rematch = False
-            if littleRank > 5 or big == "": 
-                rematch = True
+def read_matrix(path, choice_names):
+    names, rows, header_index = matrix_names(path)
+    lookup = {name.casefold(): name for name in choice_names}
+    ranks = {name: {} for name in names}
+    for row in rows[header_index + 1:]:
+        if len(row) < 2:
+            continue
+        try:
+            rank = int(clean(row[0]))
+        except ValueError:
+            continue
+        for column, name in enumerate(names, start=1):
+            if column >= len(row):
+                continue
+            for choice in split_names(row[column]):
+                canonical = lookup.get(choice.casefold())
+                if canonical and canonical not in ranks[name]:
+                    ranks[name][canonical] = rank
+    return names, ranks
 
-            filewriter.writerow({'Big':big, 'Suggested Little':little, 'Big Rank':bigRank, 'Little Rank':littleRank, 'Rematch?':rematch})
-        for little in self.little_prefs.keys(): 
-            if little not in self.bigs_matched.values(): 
-                big = ""
-                bigRank = math.inf 
-                littleRank = math.inf 
-                if littleRank > 5 or big == "": 
-                    rematch = True
-                filewriter.writerow({'Big':big, 'Suggested Little':little, 'Big Rank':bigRank, 'Little Rank':littleRank, 'Rematch?':rematch})
-        for big in self.big_prefs.keys(): 
-            if big not in self.bigs_matched.keys(): 
-                bigRank = math.inf
-                littleRank = math.inf
-                rematch = True
-                little = ""
-                filewriter.writerow({'Big':big, 'Suggested Little':little, 'Big Rank':bigRank, 'Little Rank':littleRank, 'Rematch?':rematch})
-        return None
+
+def hungarian(cost):
+    """Minimum-cost square assignment; returns row-to-column indices."""
+    n = len(cost)
+    u, v, p, way = [0] * (n + 1), [0] * (n + 1), [0] * (n + 1), [0] * (n + 1)
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0
+        minv = [float("inf")] * (n + 1)
+        used = [False] * (n + 1)
+        while True:
+            used[j0] = True
+            i0, delta, j1 = p[j0], float("inf"), 0
+            for j in range(1, n + 1):
+                if not used[j]:
+                    cur = cost[i0 - 1][j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j], way[j] = cur, j0
+                    if minv[j] < delta:
+                        delta, j1 = minv[j], j
+            for j in range(n + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+            j0 = j1
+            if p[j0] == 0:
+                break
+        while True:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+            if j0 == 0:
+                break
+    result = [0] * n
+    for j in range(1, n + 1):
+        result[p[j] - 1] = j - 1
+    return result
+
+
+def generate(little_names, little_ranks, big_names, big_ranks, count=SUGGESTION_COUNT,
+             requested_twins=None):
+    if len(little_names) != len(big_names) + 2:
+        raise ValueError(
+            f"This setup expects exactly two extra littles for twins; found "
+            f"{len(little_names)} littles and {len(big_names)} bigs."
+        )
+    requested = {big: 0 for big in big_names}
+    for prefs in little_ranks.values():
+        for big in prefs:
+            if big in requested:
+                requested[big] += 1
+
+    # Each candidate has capacity two; every other big has capacity one.
+    candidate_order = sorted(big_names, key=lambda big: (-requested[big], big.casefold()))
+    if requested_twins:
+        lookup = {name.casefold(): name for name in big_names}
+        selected = [lookup.get(name.strip().casefold()) for name in requested_twins]
+        if len(selected) not in (1, 2) or None in selected:
+            raise ValueError("TWIN_BIG_NAMES must contain one or two names from the big preferences CSV.")
+        if len(set(selected)) != len(selected):
+            raise ValueError("TWIN_BIG_NAMES must contain different bigs.")
+        if len(selected) == 1:
+            second = next(big for big in candidate_order if big != selected[0])
+            selected.append(second)
+        twin_combinations = [tuple(selected)]
+    else:
+        twin_combinations = [(candidate_order[i], candidate_order[j])
+                             for i in range(len(candidate_order))
+                             for j in range(i + 1, len(candidate_order))]
+        twin_combinations.sort(key=lambda pair: (-(requested[pair[0]] + requested[pair[1]]),
+                                                 pair[0].casefold(), pair[1].casefold()))
+    suggestions, seen = [], set()
+    rng = random.Random(20261113)
+    for offset in range(max(count * 8, len(twin_combinations))):
+        twins = twin_combinations[offset % len(twin_combinations)]
+        slots = big_names + list(twins)
+        rng.shuffle(slots)
+        scale = 100
+        cost = []
+        for little in little_names:
+            row = []
+            for big in slots:
+                # Unranked roster members go after all ranked choices.
+                lr = little_ranks[little].get(big, len(big_names) + 1)
+                br = big_ranks[big].get(little, len(little_names) + 1)
+                row.append((lr + br) * scale + rng.randrange(scale))
+            cost.append(row)
+        assignment = hungarian(cost)
+        pairs = tuple(sorted(((slots[col], little_names[i]) for i, col in enumerate(assignment)),
+                             key=lambda pair: (pair[0].casefold(), pair[1].casefold())))
+        if pairs not in seen:
+            seen.add(pairs)
+            suggestions.append((twins, pairs))
+            if len(suggestions) == count:
+                break
+    return suggestions
+
+
+def write_output(path, suggestions, little_ranks, big_ranks):
+    workbook = Workbook()
+    workbook.remove(workbook.active)
+    headers = ["Twin Big", "Big", "Suggested Little", "Big Rank", "Little Rank", "Ranked by Both?"]
+    for number, (twins, pairs) in enumerate(suggestions, start=1):
+        sheet = workbook.create_sheet(f"Suggestion {number}")
+        sheet.append(headers)
+        for big, little in pairs:
+            lr = little_ranks[little].get(big, "Unranked")
+            br = big_ranks[big].get(little, "Unranked")
+            sheet.append([
+                big if big in twins else "", big, little, br, lr,
+                lr != "Unranked" and br != "Unranked",
+            ])
+        for cell in sheet[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="4472C4")
+        sheet.freeze_panes = "A2"
+        sheet.auto_filter.ref = sheet.dimensions
+        for column in sheet.columns:
+            width = min(max(len(str(cell.value or "")) for cell in column) + 2, 32)
+            sheet.column_dimensions[get_column_letter(column[0].column)].width = width
+    workbook.save(path)
+
+
+def main(args):
+    if len(args) != 3:
+        print("Usage: python biglittle.py [little preferences.csv] [big preferences.csv]")
+        return 2
+    little_names, _, _ = matrix_names(args[1])
+    big_names, _, _ = matrix_names(args[2])
+    little_names, little_ranks = read_matrix(args[1], big_names)
+    big_names, big_ranks = read_matrix(args[2], little_names)
+    suggestions = generate(little_names, little_ranks, big_names, big_ranks,
+                           requested_twins=TWIN_BIG_NAMES)
+    write_output("suggested pairings.xlsx", suggestions, little_ranks, big_ranks)
+    print(f"Wrote {len(suggestions)} suggestions to suggested pairings.xlsx")
+    if len(suggestions) < SUGGESTION_COUNT:
+        print("Fewer than 10 unique pairings were found; review the generated suggestions.")
+    return 0
 
 
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
-        print("Run program with command 'python biglittle.py [littlePrefSheet] [bigPrefSheet]'")
-        exit(0)
-    else:
-        matcher = BLMatcher(sys.argv[1], sys.argv[2])
-        matcher.create_pref_spreadsheet()
-
-        print("\nMatches\n")
-        print(matcher.bigs_matched)
-        print("\nFind the complete list in preferences.csv\n")
-    
+    try:
+        raise SystemExit(main(sys.argv))
+    except (OSError, ValueError) as error:
+        print(f"Error: {error}", file=sys.stderr)
+        raise SystemExit(1)
